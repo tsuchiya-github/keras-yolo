@@ -25,6 +25,6 @@ def sample(length, image):
 
 
 if __name__ == '__main__':
-    image, path = hoge.sort()
+    image, path = sort.sort()
     length = len(image)
     detect_img(yolo.YOLO(), length, image, path)
