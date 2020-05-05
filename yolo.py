@@ -2,6 +2,7 @@
 """
 Class definition of YOLO_v3 style detection model on image and video
 """
+import detect
 
 import colorsys
 import os
@@ -15,13 +16,20 @@ from PIL import Image, ImageFont, ImageDraw
 
 from yolo3.model import yolo_eval, yolo_body, tiny_yolo_body
 from yolo3.utils import letterbox_image
-import os
+import cv2
 from keras.utils import multi_gpu_model
+
+
+import MySQLdb
+import mysql.connector
+
+import time
+
 
 class YOLO(object):
     _defaults = {
         "model_path": 'model_data/yolo.h5',
-        "anchors_path": 'model_data/yolo_anchors.txt',
+        "anchors_path": 'model_data/tiny_yolo_anchors.txt',
         "classes_path": 'model_data/coco_classes.txt',
         "score" : 0.3,
         "iou" : 0.45,
@@ -99,8 +107,10 @@ class YOLO(object):
                 score_threshold=self.score, iou_threshold=self.iou)
         return boxes, scores, classes
 
-    def detect_image(self, image):
+    def detect_image(self, image, name):
         start = timer()
+        cnt=0
+        flag=False
 
         if self.model_image_size != (None, None):
             assert self.model_image_size[0]%32 == 0, 'Multiples of 32 required'
@@ -112,7 +122,7 @@ class YOLO(object):
             boxed_image = letterbox_image(image, new_image_size)
         image_data = np.array(boxed_image, dtype='float32')
 
-        print(image_data.shape)
+        # print(image_data.shape)
         image_data /= 255.
         image_data = np.expand_dims(image_data, 0)  # Add batch dimension.
 
@@ -124,46 +134,71 @@ class YOLO(object):
                 K.learning_phase(): 0
             })
 
-        print('Found {} boxes for {}'.format(len(out_boxes), 'img'))
+        print("---------------------------------------------------")
+        print('Found {} boxes for {}'.format(len(out_boxes), 'img'))    
 
         font = ImageFont.truetype(font='font/FiraMono-Medium.otf',
                     size=np.floor(3e-2 * image.size[1] + 0.5).astype('int32'))
-        thickness = (image.size[0] + image.size[1]) // 300
+        thickness = (image.size[0] + image.size[1]) // 400
+        # thickness = 1
 
         for i, c in reversed(list(enumerate(out_classes))):
+            flag=True
             predicted_class = self.class_names[c]
-            box = out_boxes[i]
-            score = out_scores[i]
+            cnt+=1
+            if cnt <= 5: 
+                box = out_boxes[i]
+                score = out_scores[i]
 
-            label = '{} {:.2f}'.format(predicted_class, score)
-            draw = ImageDraw.Draw(image)
-            label_size = draw.textsize(label, font)
+                # label = '{} {:.2f}'.format(predicted_class, score)
+                label = '{}'.format(cnt)
 
-            top, left, bottom, right = box
-            top = max(0, np.floor(top + 0.5).astype('int32'))
-            left = max(0, np.floor(left + 0.5).astype('int32'))
-            bottom = min(image.size[1], np.floor(bottom + 0.5).astype('int32'))
-            right = min(image.size[0], np.floor(right + 0.5).astype('int32'))
-            print(label, (left, top), (right, bottom))
+                draw = ImageDraw.Draw(image)
+                label_size = draw.textsize(label, font)
 
-            if top - label_size[1] >= 0:
-                text_origin = np.array([left, top - label_size[1]])
-            else:
-                text_origin = np.array([left, top + 1])
+                top, left, bottom, right = box
+                top = max(0, np.floor(top + 0.5).astype('int32'))
+                left = max(0, np.floor(left + 0.5).astype('int32'))
+                bottom = min(image.size[1], np.floor(bottom + 0.5).astype('int32'))
+                right = min(image.size[0], np.floor(right + 0.5).astype('int32'))
+                print(label, (left, top), (right, bottom))
 
-            # My kingdom for a good redistributable image drawing library.
-            for i in range(thickness):
+                # データベースに接続する
+                connector = mysql.connector.connect(
+                    host = 'localhost',
+                    port = 8889,
+                    user = 'root',
+                    password = 'root',
+                    database = 'tsuchiyaweb',
+                )
+                cursor = connector.cursor()
+                update_sql = "UPDATE image_database SET class_%s = %s, rect_sx_%s = %s, rect_sy_%s = %s, rect_ex_%s = %s, rect_ey_%s = %s WHERE image_name = %s"
+                cursor.execute(update_sql, (cnt, predicted_class, cnt, int(left), cnt, int(top), cnt, int(right), cnt, int(bottom), name))
+                # SQL操作を反映させる
+                cursor.close()
+                connector.commit()
+                connector.close()
+
+                if top - label_size[1] >= 0:
+                    text_origin = np.array([left, top - label_size[1]])
+                else:
+                    text_origin = np.array([left, top + 1])
+
+                # My kingdom for a good redistributable image drawing library.
+                for i in range(thickness):
+                    draw.rectangle(
+                        [left + i, top + i, right - i, bottom - i],
+                        outline=self.colors[c])
                 draw.rectangle(
-                    [left + i, top + i, right - i, bottom - i],
-                    outline=self.colors[c])
-            draw.rectangle(
-                [tuple(text_origin), tuple(text_origin + label_size)],
-                fill=self.colors[c])
-            draw.text(text_origin, label, fill=(0, 0, 0), font=font)
-            del draw
-
+                    [tuple(text_origin), tuple(text_origin + label_size)],
+                    fill=self.colors[c])
+                draw.text(text_origin, str(cnt), fill=(0, 0, 0), font=font)
+                del draw
         end = timer()
-        print(end - start)
+
+        # print(end - start)
+        if flag==True:
+            cv2.imwrite("images/"+name, np.asarray(image)[..., ::-1])
         return image
 
     def close_session(self):
